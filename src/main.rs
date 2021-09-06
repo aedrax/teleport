@@ -135,13 +135,7 @@ fn send(mut stream: TcpStream, mut file: File, header: TeleProto) -> Result<()> 
         }
 
         sent += len;
-        let percent: f64 = (sent as f64 / header.filesize as f64) * 100f64;
-        let units = convert_units(sent as f64, header.filesize as f64);
-        print!(
-            "\r => {:.03}{} of {:.03}{} ({:.02}%)",
-            units.partial, units.partial_unit, units.total, units.total_unit, percent
-        );
-        io::stdout().flush().unwrap();
+        print_updates(sent as f64, &header);
     }
 
     Ok(())
@@ -198,21 +192,25 @@ fn recv(mut stream: TcpStream) -> Result<()> {
         let data = &buf[..len];
         let wrote = file.write(data).expect("Failed to write to file");
         if len != wrote {
-            println!("Error writing to file: {}", header.filename);
+            println!("Error writing to file: {}", &header.filename);
             break;
         }
 
         received += len as u64;
-        let percent: f64 = (received as f64 / header.filesize as f64) * 100f64;
-        let units = convert_units(received as f64, header.filesize as f64);
-        print!(
-            "\r => {:.03}{} of {:.03}{} ({:.02}%)",
-            units.partial, units.partial_unit, units.total, units.total_unit, percent
-        );
-        io::stdout().flush().unwrap();
+        print_updates(received as f64, &header);
     }
 
     Ok(())
+}
+
+fn print_updates(received: f64, header: &TeleProto) {
+    let percent: f64 = (received as f64 / header.filesize as f64) * 100f64;
+    let units = convert_units(received as f64, header.filesize as f64);
+    print!(
+        "\r => {:>8.03}{} of {:>8.03}{} ({:02.02}%)",
+        units.partial, units.partial_unit, units.total, units.total_unit, percent
+    );
+    io::stdout().flush().unwrap();
 }
 
 fn convert_units(mut partial: f64, mut total: f64) -> SizeUnit {
