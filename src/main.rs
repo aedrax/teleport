@@ -1,10 +1,9 @@
 use crypto::digest::Digest;
 use crypto::sha2::Sha512;
 use serde::{Deserialize, Serialize};
-use std::fs::{remove_file, File};
+use std::fs::File;
 use std::io::Result;
 use std::io::{self, Read, Write};
-use std::io::{Seek, SeekFrom};
 use std::net::Ipv4Addr;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -34,7 +33,6 @@ struct TeleProto {
     totalfiles: u64,
     filesize: u64,
     filename: String,
-    hash: String,
 }
 
 struct SizeUnit {
@@ -70,15 +68,14 @@ fn client(opt: Opt) -> Result<()> {
         let filename = item.file_name().unwrap();
 
         // Validate file
-        let mut file = File::open(&filepath).expect("Failed to open file");
-        let hash = calculate_hash(&mut file);
+        let file = File::open(&filepath).expect("Failed to open file");
         let meta = file.metadata().expect("Failed to read metadata");
+
         let header = TeleProto {
             filenum: (num + 1) as u64,
             totalfiles: opt.input.len() as u64,
             filesize: meta.len(),
             filename: filename.to_str().unwrap().to_string(),
-            hash: hash,
         };
 
         // Connect to server
@@ -103,15 +100,15 @@ fn client(opt: Opt) -> Result<()> {
 
         // Send file data
         let _ = send(stream, file, header);
-
-        println!(" done!");
     }
+
     Ok(())
 }
 
 /// Send function receives the ACK for data and sends the file data
 fn send(mut stream: TcpStream, mut file: File, header: TeleProto) -> Result<()> {
     let mut buf: [u8; 4096] = [0; 4096];
+    let mut hasher = Sha512::new();
 
     // Receive ACK that the server is ready for data
     stream.read(&mut buf).expect("Failed to receive ACK");
@@ -134,6 +131,7 @@ fn send(mut stream: TcpStream, mut file: File, header: TeleProto) -> Result<()> 
 
         // Send that data chunk
         let data = &buf[..len];
+        hasher.input(&data);
         let wrote = stream.write(data).expect("Failed to send data");
         if len != wrote {
             println!("Error sending data");
@@ -144,6 +142,9 @@ fn send(mut stream: TcpStream, mut file: File, header: TeleProto) -> Result<()> 
         print_updates(sent as f64, &header);
     }
 
+    println!(" done!");
+
+    println!(" => sha512: {}", hasher.result_str());
     Ok(())
 }
 
@@ -182,6 +183,7 @@ fn recv(mut stream: TcpStream) -> Result<()> {
 
     // Receive file data
     let mut file = File::create(&header.filename).expect("Could not open file");
+    let mut hasher = Sha512::new();
     let mut buf: [u8; 4096] = [0; 4096];
     let mut received: u64 = 0;
     loop {
@@ -196,6 +198,7 @@ fn recv(mut stream: TcpStream) -> Result<()> {
 
         // Write received data to file
         let data = &buf[..len];
+        hasher.input(&data);
         let wrote = file.write(data).expect("Failed to write to file");
         if len != wrote {
             println!("Error writing to file: {}", &header.filename);
@@ -206,34 +209,9 @@ fn recv(mut stream: TcpStream) -> Result<()> {
         print_updates(received as f64, &header);
     }
 
-    // Reset file reader
-    let mut file = File::open(&header.filename).expect("Could not open file");
-    let hash = calculate_hash(&mut file);
-    if hash != header.hash {
-        println!("ERROR: Hash does not match");
-        remove_file(&header.filename).expect("Could not delete file");
-    }
+    println!(" => sha512: {}", hasher.result_str());
 
     Ok(())
-}
-
-fn calculate_hash(file: &mut File) -> String {
-    let mut hasher = Sha512::new();
-    let mut buf: [u8; 4096] = [0; 4096];
-
-    loop {
-        let len = file.read(&mut buf).expect("Failed to read file");
-        if len == 0 {
-            break;
-        }
-        hasher.input(&buf);
-    }
-
-    // Reset file reader
-    file.seek(SeekFrom::Start(0))
-        .expect("Failed to seek to file start");
-
-    hasher.result_str()
 }
 
 fn print_updates(received: f64, header: &TeleProto) {
